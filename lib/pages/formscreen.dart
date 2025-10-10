@@ -1,222 +1,205 @@
 import 'dart:io';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:image_cropper/image_cropper.dart';
-import 'package:cativerse/pages/root_app.dart';
+import 'package:multi_select_flutter/multi_select_flutter.dart';
+
+import '../models/cat_models.dart';
+import '../data/breed_and_vaccines.dart';
+import 'cat_health_page.dart'; // มีไฟล์นี้อยู่แล้วในโฟลเดอร์ pages
 
 class AddCatForm extends StatefulWidget {
+  AddCatForm({super.key});
   @override
-  _AddCatFormState createState() => _AddCatFormState();
+  State<AddCatForm> createState() => _AddCatFormState();
 }
 
 class _AddCatFormState extends State<AddCatForm> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _ageController = TextEditingController();
-  final _breedController = TextEditingController();
-  final _descriptionController = TextEditingController();
-
-  List<File> _images = [];
+  final _nameC = TextEditingController();
+  final _descC = TextEditingController();
+  String? _breed;
+  String _gender = 'male';
+  DateTime? _birthdate;
   bool _isLoading = false;
-  String _gender = 'male'; // Default value, 'male' or 'female'
+  final List<File> _localImages = [];
+  final ImagePicker _picker = ImagePicker();
+  List<String> _selectedVaccines = [];
 
-  Future<void> _pickImages() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickMultiImage();
-    if (picked != null && picked.length <= 4) {
-      List<File> tempImages = [];
-      for (var img in picked) {
-        final cropped = await ImageCropper().cropImage(
-          sourcePath: img.path,
-          aspectRatio: CropAspectRatio(ratioX: 1, ratioY: 1),
-          compressQuality: 80,
-          uiSettings: [
-            AndroidUiSettings(toolbarTitle: 'ปรับแต่งรูปแมว'),
-            IOSUiSettings(title: 'ปรับแต่งรูปแมว'),
-          ],
-        );
-        if (cropped != null) tempImages.add(File(cropped.path));
-      }
-      setState(() => _images = tempImages);
-    } else if (picked != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เลือกรูปได้ไม่เกิน 4 รูป')),
-      );
+  Future<void> _pickImage() async {
+    final picks = await _picker.pickMultiImage(imageQuality: 85);
+    if (picks.isNotEmpty) {
+      setState(() => _localImages.addAll(picks.map((e) => File(e.path))));
     }
   }
 
-  Future<List<String>> _uploadImages(List<File> images) async {
-    List<String> urls = [];
-    for (var image in images) {
-      final fileName = DateTime.now().millisecondsSinceEpoch.toString();
-      final ref = FirebaseStorage.instance.ref().child('cat_images/$fileName.jpg');
-      final task = await ref.putFile(image);
-      urls.add(await task.ref.getDownloadURL());
+  Future<List<String>> _uploadImages(String catId) async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final urls = <String>[];
+    for (var i = 0; i < _localImages.length; i++) {
+      final file = _localImages[i];
+      final ref = FirebaseStorage.instance
+          .ref('cat_images/$uid/$catId/${DateTime.now().millisecondsSinceEpoch}_$i.jpg');
+      await ref.putFile(file);
+      urls.add(await ref.getDownloadURL());
     }
     return urls;
   }
 
-  Future<void> _submitForm() async {
-    if (!_formKey.currentState!.validate() || _images.isEmpty) {
-      if (_images.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('กรุณาเลือกรูปแมวก่อน')),
-        );
-      }
+  Future<void> _save() async {
+    if (_isLoading) return;
+    if (!_formKey.currentState!.validate()) return;
+    if (_localImages.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('กรุณาเลือกรูปอย่างน้อย 1 รูป')));
       return;
     }
+
     setState(() => _isLoading = true);
     try {
-      final imageUrls = await _uploadImages(_images);
-      await FirebaseFirestore.instance.collection('cats').add({
-        'name': _nameController.text.trim(),
-        'age': int.parse(_ageController.text.trim()),
-        'breed': _breedController.text.trim(),
-        'description': _descriptionController.text.trim(),
-        'imageUrls': imageUrls,
-        'gender': _gender, // เก็บข้อมูลเพศ
-        'ownerId': FirebaseAuth.instance.currentUser!.uid,
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final doc = await FirebaseFirestore.instance.collection('cats').add({
+        'ownerId': uid,
+        'name': _nameC.text.trim(),
+        'breed': _breed,
+        'gender': _gender,
+        'birthdate': _birthdate != null ? Timestamp.fromDate(_birthdate!) : null,
+        'description': _descC.text.trim(),
+        'imageUrls': [],
         'createdAt': FieldValue.serverTimestamp(),
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เพิ่มข้อมูลแมวเรียบร้อยแล้ว!')),
-      );
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => RootApp()),
-        (route) => false,
-      );
+
+      final imgUrls = await _uploadImages(doc.id);
+      await doc.update({'imageUrls': imgUrls});
+
+      // seed vaccine subcollection from multi-select
+      for (final v in _selectedVaccines) {
+        await doc.collection('vaccineRecords').add({
+          'date': FieldValue.serverTimestamp(),
+          'type': v,
+          'notes': 'เลือกตอนสร้าง',
+        });
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('บันทึกสำเร็จ')));
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => CatHealthPage(catId: doc.id),
+        ));
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('ผิดพลาด: $e')));
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  InputDecoration _inputStyle(String label) => InputDecoration(
-        labelText: label,
-        filled: true,
-        fillColor: Colors.grey[100],
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      );
+  @override
+  void dispose() {
+    _nameC.dispose();
+    _descC.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: Text('เพิ่มข้อมูลแมว', style: TextStyle(color: Colors.black)),
-        backgroundColor: Colors.white,
-        elevation: 0,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              GestureDetector(
-                onTap: _pickImages,
-                child: Container(
-                  height: 150,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[200],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: _images.isEmpty
-                      ? Center(child: Icon(Icons.add_photo_alternate, size: 50))
-                      : ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _images.length,
-                          itemBuilder: (_, i) => Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.file(
-                                _images[i],
-                                width: 100,
-                                height: 100,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
-                        ),
-                ),
+      appBar: AppBar(title: const Text('เพิ่มโปรไฟล์แมว')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            TextFormField(
+              controller: _nameC,
+              decoration: const InputDecoration(labelText: 'ชื่อแมว'),
+              validator: (v) => v == null || v.trim().isEmpty ? 'กรุณากรอกชื่อ' : null,
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _breed,
+              items: kCatBreeds.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
+              onChanged: (v) => setState(() => _breed = v),
+              decoration: const InputDecoration(labelText: 'สายพันธุ์'),
+              validator: (v) => v == null ? 'กรุณาเลือกสายพันธุ์' : null,
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _gender,
+              items: const [
+                DropdownMenuItem(value: 'male', child: Text('เพศผู้')),
+                DropdownMenuItem(value: 'female', child: Text('เพศเมีย')),
+              ],
+              onChanged: (v) => setState(() => _gender = v ?? 'male'),
+              decoration: const InputDecoration(labelText: 'เพศ'),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () async {
+                final now = DateTime.now();
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: DateTime(now.year - 1),
+                  firstDate: DateTime(now.year - 30),
+                  lastDate: now,
+                );
+                if (picked != null) setState(() => _birthdate = picked);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(labelText: 'วันเกิด'),
+                child: Text(_birthdate != null
+                    ? _birthdate!.toString().split(' ').first
+                    : 'แตะเพื่อเลือก'),
               ),
-              SizedBox(height: 16),
-              TextFormField(
-                controller: _nameController,
-                decoration: _inputStyle('ชื่อแมว'),
-                validator: (v) => v!.isEmpty ? 'กรุณาใส่ชื่อแมว' : null,
-              ),
-              SizedBox(height: 12),
-              TextFormField(
-                controller: _ageController,
-                decoration: _inputStyle('อายุแมว (ปี)'),
-                keyboardType: TextInputType.number,
-                validator: (v) => v!.isEmpty ? 'กรุณาใส่อายุแมว' : null,
-              ),
-              SizedBox(height: 12),
-              TextFormField(
-                controller: _breedController,
-                decoration: _inputStyle('สายพันธุ์'),
-              ),
-              SizedBox(height: 12),
-              TextFormField(
-                controller: _descriptionController,
-                decoration: _inputStyle('ลักษณะ / พฤติกรรม'),
-                maxLines: 3,
-              ),
-              SizedBox(height: 16),
-              // เพิ่ม Radio Button สำหรับเพศ
-              Row(
-                children: [
-                  Text("เพศแมว:", style: TextStyle(fontSize: 16)),
-                  Radio<String>(
-                    value: 'male',
-                    groupValue: _gender,
-                    onChanged: (String? value) {
-                      setState(() {
-                        _gender = value!;
-                      });
-                    },
-                  ),
-                  Text("ชาย"),
-                  Radio<String>(
-                    value: 'female',
-                    groupValue: _gender,
-                    onChanged: (String? value) {
-                      setState(() {
-                        _gender = value!;
-                      });
-                    },
-                  ),
-                  Text("หญิง"),
-                ],
-              ),
-              SizedBox(height: 20),
-              _isLoading
-                  ? Center(child: CircularProgressIndicator())
-                  : ElevatedButton.icon(
-                      onPressed: _submitForm,
-                      icon: Icon(Icons.save),
-                      label: Text('บันทึก'),
-                      style: ElevatedButton.styleFrom(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+            ),
+            const SizedBox(height: 12),
+            MultiSelectDialogField<String>(
+              items: kVaccineOptions.map((e) => MultiSelectItem(e, e)).toList(),
+              title: const Text('วัคซีนพื้นฐาน'),
+              buttonText: const Text('เลือกวัคซีนที่ได้รับ'),
+              initialValue: _selectedVaccines,
+              onConfirm: (vals) => _selectedVaccines = vals,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _descC,
+              decoration: const InputDecoration(labelText: 'คำอธิบาย'),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final f in _localImages)
+                  Stack(
+                    alignment: Alignment.topRight,
+                    children: [
+                      Image.file(f, width: 100, height: 100, fit: BoxFit.cover),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () => setState(() => _localImages.remove(f)),
                       ),
-                    ),
-            ],
-          ),
+                    ],
+                  ),
+                OutlinedButton.icon(
+                  onPressed: _pickImage,
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('เลือกรูป'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _isLoading ? null : _save,
+              icon: const Icon(Icons.check),
+              label: Text(_isLoading ? 'กำลังบันทึก...' : 'บันทึก'),
+            ),
+          ],
         ),
       ),
     );

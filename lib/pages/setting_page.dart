@@ -1,162 +1,90 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'login_page.dart'; // เปลี่ยน path ให้ถูกต้อง
+import '../data/seed_lookups.dart';
 
+// ⬇️ เปลี่ยนชื่อคลาสเป็น SettingsPage ให้ตรงกับ account_page.dart
 class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key});
+
+  Future<void> _signOut(BuildContext context) async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (context.mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ออกจากระบบไม่สำเร็จ: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text("Settings", style: TextStyle(fontWeight: FontWeight.w600)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
-      ),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         children: [
-          _buildTile(
-            icon: Icons.person,
-            title: "Account",
-            subtitle: "Manage your account",
-            onTap: () {},
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('บัญชีผู้ใช้', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
-          _buildTile(
-            icon: Icons.notifications,
-            title: "Notifications",
-            subtitle: "Notification preferences",
-            onTap: () {},
+          if (user != null)
+            ListTile(
+              leading: const Icon(Icons.person),
+              title: Text(user.email ?? 'ผู้ใช้ไม่ทราบอีเมล'),
+              subtitle: const Text('อีเมลที่ใช้เข้าสู่ระบบ'),
+            ),
+          ListTile(
+            leading: const Icon(Icons.edit),
+            title: const Text('แก้ไขโปรไฟล์'),
+            onTap: () => Navigator.pushNamed(context, '/profile/edit'),
           ),
-          _buildTile(
-            icon: Icons.lock,
-            title: "Privacy",
-            subtitle: "Privacy and security",
-            onTap: () {},
+          const Divider(height: 24),
+
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text('เครื่องมือผู้ดูแล (Dev/Admin)', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
-          _buildTile(
-            icon: Icons.color_lens,
-            title: "Appearance",
-            subtitle: "Light / Dark mode",
-            onTap: () {},
-          ),
-          _buildTile(
-            icon: Icons.info,
-            title: "About",
-            subtitle: "App version, developers",
-            onTap: () {},
-          ),
-          _buildTile(
-            icon: Icons.logout,
-            title: "Logout",
+          ListTile(
+            leading: const Icon(Icons.cloud_upload),
+            title: const Text('Seed Lookup Data'),
+            subtitle: const Text('สร้างรายการสายพันธุ์/วัคซีนใน Firestore (กดครั้งเดียวพอ)'),
             onTap: () async {
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: Text("Confirm Logout"),
-                  content: Text("Are you sure you want to log out?"),
-                  actions: [
-                    TextButton(
-                      child: Text("Cancel"),
-                      onPressed: () => Navigator.pop(context, false),
-                    ),
-                    TextButton(
-                      child: Text("Logout"),
-                      onPressed: () => Navigator.pop(context, true),
-                    ),
-                  ],
-                ),
-              );
-
-              if (confirm ?? false) {
-                await FirebaseAuth.instance.signOut();
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => LoginPage()),
-                  (route) => false,
-                );
-              }
-            },
-          ),
-          _buildTile(
-            icon: Icons.dangerous,
-            title: "Delete Account",
-            onTap: () async {
-              final TextEditingController passwordController = TextEditingController();
-
-              final confirm = await showDialog<bool>(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: Text("Delete Account"),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text("This will permanently delete your account."),
-                      SizedBox(height: 16),
-                      TextField(
-                        controller: passwordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: "Confirm your password",
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      child: Text("Cancel"),
-                      onPressed: () => Navigator.pop(context, false),
-                    ),
-                    TextButton(
-                      child: Text("Delete", style: TextStyle(color: Colors.red)),
-                      onPressed: () => Navigator.pop(context, true),
-                    ),
-                  ],
-                ),
-              );
-
-              if (confirm ?? false) {
-                try {
-                  User? user = FirebaseAuth.instance.currentUser;
-                  String email = user?.email ?? "";
-
-                  // re-authenticate
-                  AuthCredential credential = EmailAuthProvider.credential(
-                    email: email,
-                    password: passwordController.text,
-                  );
-
-                  await user?.reauthenticateWithCredential(credential);
-                  await user?.delete();
-
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (context) => LoginPage()),
-                    (route) => false,
-                  );
-                } on FirebaseAuthException catch (e) {
+              try {
+                await seedLookups();
+                if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Error: ${e.message}")),
+                    const SnackBar(content: Text('Seed ข้อมูลเรียบร้อย')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Seed ไม่สำเร็จ: $e')),
                   );
                 }
               }
             },
           ),
+          const Divider(height: 24),
+
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text('อื่น ๆ', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('ออกจากระบบ'),
+            onTap: () => _signOut(context),
+          ),
+          const SizedBox(height: 24),
         ],
       ),
-    );
-  }
-
-  Widget _buildTile({
-    required IconData icon,
-    required String title,
-    String? subtitle,
-    required VoidCallback onTap,
-  }) {
-    return ListTile(
-      leading: Icon(icon, color: Colors.black54),
-      title: Text(title),
-      subtitle: subtitle != null ? Text(subtitle, style: TextStyle(fontSize: 12)) : null,
-      onTap: onTap,
-      contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      trailing: Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
     );
   }
 }
