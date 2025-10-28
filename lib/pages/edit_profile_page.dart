@@ -1,4 +1,4 @@
-// edit_profile_page.dart
+// lib/pages/edit_profile_page.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -8,8 +8,10 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cativerse/theme/colors.dart';
 
 class EditProfilePage extends StatefulWidget {
+  const EditProfilePage({super.key});
+
   @override
-  _EditProfilePageState createState() => _EditProfilePageState();
+  State<EditProfilePage> createState() => _EditProfilePageState();
 }
 
 class _EditProfilePageState extends State<EditProfilePage> {
@@ -17,6 +19,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final _lastNameController = TextEditingController();
   final _phoneController = TextEditingController();
   final _usernameController = TextEditingController();
+
   String _currentAvatarUrl = '';
   File? _newAvatar;
   bool _isLoading = false;
@@ -27,25 +30,48 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _loadUserProfile();
   }
 
+  @override
+  void dispose() {
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _phoneController.dispose();
+    _usernameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadUserProfile() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-    if (doc.exists) {
-      final data = doc.data()!;
-      _firstNameController.text = data['firstName'] ?? '';
-      _lastNameController.text = data['lastName'] ?? '';
-      _phoneController.text = data['phone'] ?? '';
-      _usernameController.text = data['username'] ?? '';
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      if (!doc.exists) return;
+      final data = doc.data() as Map<String, dynamic>;
+
+      _firstNameController.text = (data['firstName'] as String?) ?? '';
+      _lastNameController.text = (data['lastName'] as String?) ?? '';
+      _phoneController.text = (data['phone'] as String?) ?? '';
+      _usernameController.text = (data['username'] as String?) ?? '';
+
+      // ให้ imageUrl มาก่อน ถ้าไม่มีค่อยถอยไป avatar
+      final imageUrl = (data['imageUrl'] as String?) ?? '';
+      final avatar = (data['avatar'] as String?) ?? '';
+
       setState(() {
-        _currentAvatarUrl = data['avatar'] ?? '';
+        _currentAvatarUrl =
+            imageUrl.isNotEmpty ? imageUrl : (avatar.isNotEmpty ? avatar : '');
       });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('โหลดโปรไฟล์ไม่สำเร็จ: $e')),
+      );
     }
   }
 
   Future<void> _pickNewAvatar() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
-      imageQuality: 75,
+      imageQuality: 80,
     );
     if (picked != null) {
       setState(() {
@@ -55,30 +81,63 @@ class _EditProfilePageState extends State<EditProfilePage> {
   }
 
   Future<String> _uploadAvatar(File file) async {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
     final fileName = DateTime.now().millisecondsSinceEpoch.toString();
-    final ref = FirebaseStorage.instance.ref().child('avatars/$fileName.jpg');
-    final snapshot = await ref.putFile(file);
-    return await snapshot.ref.getDownloadURL();
+    final ref =
+        FirebaseStorage.instance.ref().child('avatars/$uid/$fileName.jpg');
+    final task = await ref.putFile(file);
+    return await task.ref.getDownloadURL();
   }
 
   Future<void> _saveProfile() async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    String avatarUrl = _currentAvatarUrl;
-    if (_newAvatar != null) {
-      avatarUrl = await _uploadAvatar(_newAvatar!);
+
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      String avatarUrl = _currentAvatarUrl;
+
+      if (_newAvatar != null) {
+        avatarUrl = await _uploadAvatar(_newAvatar!);
+      }
+
+      // อัปเดต Firestore: เก็บทั้ง avatar และ imageUrl ให้ตรงกันสำหรับ chat-core
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'firstName': _firstNameController.text.trim(),
+        'lastName': _lastNameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'username': _usernameController.text.trim(),
+        'avatar': avatarUrl,
+        'imageUrl': avatarUrl,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // อัปเดตโปรไฟล์ใน FirebaseAuth (optional ให้รูป/ชื่อไปด้วย)
+      try {
+        await FirebaseAuth.instance.currentUser!.updatePhotoURL(avatarUrl);
+        final displayName =
+            '${_firstNameController.text.trim()} ${_lastNameController.text.trim()}'
+                .trim();
+        if (displayName.isNotEmpty) {
+          await FirebaseAuth.instance.currentUser!.updateDisplayName(displayName);
+        }
+      } catch (_) {
+        // ไม่ critical ถ้าอัปเดต Auth โปรไฟล์ไม่ได้
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('บันทึกโปรไฟล์เรียบร้อย')),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('บันทึกไม่สำเร็จ: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
-      'firstName': _firstNameController.text.trim(),
-      'lastName': _lastNameController.text.trim(),
-      'phone': _phoneController.text.trim(),
-      'username': _usernameController.text.trim(),
-      'avatar': avatarUrl,
-    });
-
-    setState(() => _isLoading = false);
-    Navigator.pop(context);
   }
 
   InputDecoration _inputDecoration(String hint) {
@@ -90,21 +149,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
         borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide.none,
       ),
-      contentPadding: EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: white,
       appBar: AppBar(
-        title: Text('Edit Profile'),
-        backgroundColor: Colors.white,
+        title: const Text('Edit Profile'),
+        backgroundColor: white,
         foregroundColor: Colors.black,
         elevation: 0,
+        centerTitle: true,
       ),
       body: _isLoading
-          ? Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -113,59 +174,75 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   Center(
                     child: GestureDetector(
                       onTap: _pickNewAvatar,
-                      child: CircleAvatar(
-                        radius: 50,
-                        backgroundImage: _newAvatar != null
-                            ? FileImage(_newAvatar!) as ImageProvider
-                            : (_currentAvatarUrl.isNotEmpty
-                                ? NetworkImage(_currentAvatarUrl)
-                                : AssetImage('assets/images/default_avatar.png') as ImageProvider),
-                        child: Align(
-                          alignment: Alignment.bottomRight,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.black54,
-                            ),
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.edit, color: Colors.white, size: 18),
+                      child: Stack(
+                        children: [
+                          CircleAvatar(
+                            radius: 52,
+                            backgroundImage: _newAvatar != null
+                                ? FileImage(_newAvatar!) as ImageProvider
+                                : (_currentAvatarUrl.isNotEmpty
+                                    ? NetworkImage(_currentAvatarUrl)
+                                    : const AssetImage(
+                                            'assets/images/default_avatar.png')
+                                        as ImageProvider),
+                            child: _currentAvatarUrl.isEmpty && _newAvatar == null
+                                ? const Icon(Icons.person, size: 52)
+                                : null,
                           ),
-                        ),
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.black54,
+                              ),
+                              padding: const EdgeInsets.all(6),
+                              child: const Icon(Icons.edit,
+                                  color: Colors.white, size: 18),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                  SizedBox(height: 24),
+                  const SizedBox(height: 24),
                   TextField(
                     controller: _firstNameController,
-                    decoration: _inputDecoration('ชื่อ'),
+                    decoration: _inputDecoration('ชื่อ (First name)'),
+                    textInputAction: TextInputAction.next,
                   ),
-                  SizedBox(height: 12),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _lastNameController,
-                    decoration: _inputDecoration('นามสกุล'),
+                    decoration: _inputDecoration('นามสกุล (Last name)'),
+                    textInputAction: TextInputAction.next,
                   ),
-                  SizedBox(height: 12),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _phoneController,
                     decoration: _inputDecoration('เบอร์โทร'),
                     keyboardType: TextInputType.phone,
+                    textInputAction: TextInputAction.next,
                   ),
-                  SizedBox(height: 12),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _usernameController,
                     decoration: _inputDecoration('ยูสเซอร์เนม'),
+                    textInputAction: TextInputAction.done,
                   ),
-                  SizedBox(height: 24),
+                  const SizedBox(height: 24),
                   ElevatedButton(
-                    onPressed: _saveProfile,
+                    onPressed: _isLoading ? null : _saveProfile,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.black,
-                      padding: EdgeInsets.symmetric(vertical: 16),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: Text('บันทึก', style: TextStyle(color: Colors.white)),
+                    child: const Text('บันทึก',
+                        style: TextStyle(color: Colors.white)),
                   ),
                 ],
               ),

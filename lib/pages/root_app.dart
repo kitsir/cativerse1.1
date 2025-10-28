@@ -1,4 +1,4 @@
-import 'package:cativerse/pages/like_page.dart';
+// lib/pages/root_app.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cativerse/pages/account_page.dart';
@@ -10,22 +10,28 @@ class RootApp extends StatefulWidget {
   const RootApp({super.key});
 
   @override
-  _RootAppState createState() => _RootAppState();
+  State<RootApp> createState() => _RootAppState();
 }
 
 class _RootAppState extends State<RootApp> {
   int pageIndex = 0;
 
-  final List<Widget> _pages = [
+  final List<Widget> _pages = const [
     ExplorePage(),
     ChatPage(),
     AccountPage(),
   ];
 
-  final List<String> _icons = [
+  final List<String> _icons = const [
     "assets/images/explore_active_icon.svg",
     "assets/images/chat_active_icon.svg",
     "assets/images/account_active_icon.svg",
+  ];
+
+  final List<String> _titles = const [
+    "Cativerse",
+    "Messages",
+    "Profile",
   ];
 
   @override
@@ -44,23 +50,40 @@ class _RootAppState extends State<RootApp> {
     return AppBar(
       backgroundColor: white,
       elevation: 0,
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: List.generate(_icons.length, (index) {
-          return IconButton(
-            onPressed: () {
-              setState(() {
-                pageIndex = index;
-              });
-            },
-            icon: SvgPicture.asset(
-              _icons[index],
-              color: pageIndex == index ? Colors.orange : Colors.grey,
-              width: 26,
-              height: 26,
+      centerTitle: true,
+      toolbarHeight: 92,
+      titleSpacing: 0,
+      title: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // ชื่อหน้า (เปลี่ยนตามแท็บ)
+          Text(
+            _titles[pageIndex],
+            style: TextStyle(
+              color: Colors.orange.shade700,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
             ),
-          );
-        }),
+          ),
+          const SizedBox(height: 12),
+          // แถบไอคอนสลับหน้า
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(_icons.length, (index) {
+              final isActive = pageIndex == index;
+              return IconButton(
+                onPressed: () => setState(() => pageIndex = index),
+                icon: SvgPicture.asset(
+                  _icons[index],
+                  width: 26,
+                  height: 26,
+                  color: isActive ? Colors.orange : Colors.grey,
+                ),
+                splashRadius: 22,
+              );
+            }),
+          ),
+        ],
       ),
     );
   }
